@@ -1,0 +1,48 @@
+# tmsh list ltm data-group internal Firewall-Policy-Like_Data_Group
+
+
+tmsh
+load sys config from-terminal replace
+
+ltm data-group internal Firewall-Policy-Like_Data_Group {
+    records {
+        0000 {
+            data "aclact,src,pattern,dst,auth or no-auth,ssl-bypass or ssl-intercept"
+        }
+        0010 {
+            data deny,ANY,equals,bad-site.test,*,*
+        }
+        0011 {
+            data deny,ANY,malware-site.test,*,*
+        }
+        0012 {
+            data deny,192.168.0.123,*,ANY,*,*
+        }
+        0013 {
+            data deny,ANY,matches_regex,.*\\.eicar.org,*,*
+        }
+        0100 {
+            data allow,10.0.0.0/8,equals,www.example.com,no-auth,ssl-intercept
+        }
+        0101 {
+            data allow,172.16.0.0/12,equals,bank.test,auth,ssl-bypass
+        }
+        0102 {
+            data allow,192.168.0.0/16,equals,1.1.1.1,auth,ssl-bypass
+        }
+        0103 {
+            data allow,192.168.0.0/16,*,ANY,no-auth,ssl-bypass
+        }
+        0104 {
+            data allow,ANY,equals,www.google.com,auth,ssl-intercept
+        }
+    }
+    type string
+}
+
+
+quit
+
+tmsh save sys config partitions all
+
+tmsh list ltm data-group internal Firewall-Policy-Like_Data_Group

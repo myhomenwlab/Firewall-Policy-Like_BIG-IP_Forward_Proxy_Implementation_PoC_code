@@ -1,0 +1,29 @@
+when RULE_INIT {
+  set ::debug_enable 1 ;# 0: Disable debug  1: Enabled debug
+} ;# RULE_INIT
+
+proc debug {msg} {
+  if {$::debug_enable >= 1} {
+    log local0. $msg
+  }
+} ; # proc debug
+
+when CLIENT_ACCEPTED {
+  # Preparing to accept HTTP (Non-SSL)
+  SSL::disable serverside
+} ; # CLIENT_ACCEPTED
+
+when CLIENTSSL_CLIENTHELLO {
+  # Preparing to accept HTTPS (SSL)
+  SSL::enable serverside
+} ; # CLIENTSSL_CLIENTHELLO
+
+when CLIENTSSL_SERVERHELLO_SEND {
+  # Handling SSL decryption (bypass or intercept)
+  sharedvar ssl_bypass_enable
+
+  if { $ssl_bypass_enable == 1 } {
+    SSL::forward_proxy policy bypass
+    call debug "Enable SSL Forward Proxy Bypass"
+ }
+} ; # CLIENTSSL_SERVERHELLO_SEND

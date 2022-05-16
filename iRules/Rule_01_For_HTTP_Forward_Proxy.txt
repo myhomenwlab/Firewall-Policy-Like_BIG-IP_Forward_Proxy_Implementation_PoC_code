@@ -1,0 +1,169 @@
+when RULE_INIT {
+  # TODO: You MUST specify Data Group Name
+  set static::dgname "Firewall-Policy-Like_Data_Group"
+
+  # TODO: You MUST specify Virtual Server Name For SSL Forward Proxy
+  set static::vsname "VS_SSL_FORWARD_PROXY"
+
+  # Debug Option
+  set static::debug_enable 1 ; # 0: Disable debug  1: Enable debug
+} ; # RULE_INIT
+
+
+proc debug {msg} {
+  if {$::debug_enable >= 1} {
+    log local0. $msg
+  }
+} ; # proc debug
+
+
+when HTTP_REQUEST {
+  # TODO: You MUST specify Virtual Server Name
+  virtual $::vsname [HTTP::proxy addr] [HTTP::proxy port]
+} ; # HTTP_REQUEST
+
+
+when HTTP_PROXY_REQUEST {
+  call debug "Start HTTP_PROXY_REQUEST"
+
+  sharedvar ssl_bypass_enable
+  set ssl_bypass_enable 0 ; # 0: SSL Intercept (SSL Bypass is disabled)  1: SSL Bypass
+
+  set domain [string tolower [URI::host [HTTP::uri]]]
+
+  # Read Data Group and sort Key by string order.
+  set dgdata [class get $::dgname]
+  set dgsize [class size $::dgname]
+  set dgkeylist ""
+
+  set i 0
+  while {$i < $dgsize} {
+    # Get key
+    set dgkey [lindex [lindex $dgdata $i] 0]
+    # Append key list
+    lappend dgkeylist $dgkey
+    incr i
+  }
+
+  # Sort key by number.
+  set dgkeylist [lsort -ascii $dgkeylist]
+
+  call debug "dgkeylist: $dgkeylist"
+
+  # Retrieve records one by one according to the sorted key order of the Data Group.
+  foreach dgkey $dgkeylist {
+    set dgvalue [class match -value $dgkey equals $::dgname]
+
+    call debug "Processing Key (Order Number): $dgkey"
+
+    # Skip Policy ID: 0000 (ID: 0000 is example purpose)
+    if {$dgkey == "0000" } {
+      call debug "Skip Policy ID: 0000 (ID: 0000 is example purpose)"
+      continue
+    }
+
+    # Set each field to variable with meaning
+    set f_aclact [lindex [split $dgvalue {,}] 0]
+    call debug "Action: $f_aclact"
+
+    set match_src 0
+    set f_src [lindex [split $dgvalue {,}] 1]
+
+    # "Any" is special keyword
+    # "0.0.0.0/0" cannot be compared by IP::addr
+    if { $f_src == "ANY" } {
+      set match_src 1
+    } elseif { $f_src == "0.0.0.0/0" } {
+      set match_src 1
+    } else {
+      # Check IPv4 Format
+      if {[regexp {^([0-9]{1,3}[.]){3}[0-9]{1,3}$} $f_src]} {
+         call debug "f_src: $f_src is VALID IPv4 Address."
+         if { [IP::addr [IP::client_addr] equals $f_src] } { set match_src 1 }
+      } else {
+         call debug "f_src: $f_src is INVALID IPv4 Address."
+         continue
+      }
+    }
+    call debug "Source: $f_src"
+
+    set f_pattern [lindex [split $dgvalue {,}] 2]
+    call debug "Match Pattern Type: $f_pattern"
+
+    set f_dst [lindex [split $dgvalue {,}] 3]
+    call debug "Destination: $f_dst"
+
+    set f_authact [lindex [split $dgvalue {,}] 4]
+    call debug "Authentication Action: $f_authact"
+
+    set f_sslact [lindex [split $dgvalue {,}] 5]
+    call debug "SSL Bypass & Intercept Action: $f_sslact"
+
+    if { $match_src == 1 } {
+      # Lookup each policy
+      set match_dst 0
+      switch $f_pattern {
+        "*" { if {  $f_dst == "ANY" } { set match_dst 1 } }
+        "equals" { if { $domain equals $f_dst } { set match_dst 1 } }
+        "starts_with" { if { $domain starts_with $f_dst } { set match_dst 1 } }
+        "contains" { if { $domain contains $f_dst } { set match_dst 1 } }
+        "ends_with" { if { $domain ends_with $f_dst } { set match_dst 1 } }
+        "matches_regex" { if { $domain matches_regex $f_dst } { set match_dst 1 } }
+        default { 
+          call debug "Pattern field keyword: *, equals, starts_with, contains, ends_with, matches_regex"
+          call debug "Your specify Pattern field: $f_pattern"
+          continue
+        }
+      }
+
+      if { $match_dst == 1 } {
+        call debug "Destination matched."
+
+        # Action (deny or allow)
+        if { $f_aclact == "deny" } {
+          reject
+          call debug "Reject Connection"
+        } elseif { $f_aclact == "allow" } {
+          # Authentication Action (no-auth or auth)
+          if { $f_authact == "no-auth" } {
+            ACCESS::disable
+            call debug "Authentication is disabled"
+          } elseif { $f_authact == "auth" } {
+            ACCESS::enable
+            call debug "Authentication is enabled"
+          } else {
+            # No Action
+          }
+
+          # SSL Bypass & Intercep Action (ssl-bypass or ssl-intercept)
+          if { $f_sslact == "ssl-bypass" } {
+            set ssl_bypass_enable 1
+            call debug "SSL Bypass is enabled"
+          } else {
+            # No Action => Default Action: SSL Intercept
+          }
+        }
+
+        # Do not proceed to the next policy
+        break
+
+      } else {
+        # Does not match poliy, proceed to the next policy
+        continue
+      }
+    }
+  } ; # Ending lookup policy
+
+  # Forward to SSL Forward Proxy Virtual Server
+  if {[regexp {^([0-9]{1,3}[.]){3}[0-9]{1,3}$} $domain]} {
+    set addr $domain
+  } else {
+    set result [RESOLV::lookup -a $domain]
+    set addr [lindex $result 0]
+  }
+
+  set port [URI::port [HTTP::uri]]
+
+  virtual $::vsname $addr $port
+
+} ; # HTTP_PROXY_REQUEST

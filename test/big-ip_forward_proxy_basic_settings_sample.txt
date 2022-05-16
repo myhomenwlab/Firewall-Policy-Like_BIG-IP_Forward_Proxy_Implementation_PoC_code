@@ -1,0 +1,115 @@
+# BIG-IP Forward Proxy Basic Settings Sample
+
+## HTTP Forward Proxy
+HTTPBaseName="HTTP_FORWARD_PROXY"
+VS_IP="198.51.100.123"
+VS_PORT="8080"
+
+echo $HTTPBaseName
+echo $VS_IP
+echo $VS_PORT
+
+
+
+tmsh list net dns-resolver
+
+tmsh create net dns-resolver RESOLVER_${HTTPBaseName} { forward-zones replace-all-with { . { nameservers replace-all-with { 1.1.1.1:domain { } } } } route-domain 0 }
+
+tmsh list net dns-resolver
+
+
+
+tmsh list net tunnels
+
+tmsh create net tunnels tunnel http-tunnel_${HTTPBaseName} { profile tcp-forward }
+
+tmsh list net tunnels
+
+
+
+tmsh list ltm profile http
+
+tmsh create ltm profile http http_${HTTPBaseName} {  defaults-from http-explicit explicit-proxy { default-connect-handling allow dns-resolver RESOLVER_${HTTPBaseName} tunnel-name http-tunnel_${HTTPBaseName} } proxy-type explicit }
+
+tmsh list ltm profile http
+
+
+
+tmsh list ltm virtual
+
+tmsh create ltm virtual VS_${HTTPBaseName} { destination ${VS_IP}:${VS_PORT} ip-protocol tcp mask 255.255.255.255 profiles replace-all-with { http_${HTTPBaseName} { } tcp } source 0.0.0.0/0 source-address-translation { type automap } translate-address enabled translate-port enabled}
+
+tmsh list ltm virtual
+
+
+
+tmsh save sys config partitions all
+
+
+
+## SSL Forward Proxy
+SSLBaseName="SSL_FORWARD_PROXY"
+dirname="/var/tmp"
+CASubject="/C=JP/O=DEMO\ COMPANY/CN=SSL\ FORWARD\ PROXY\ CA"
+
+echo $SSLBaseName
+echo $dirname
+echo $CASubject
+
+
+
+openssl genrsa -out ${dirname}/${SSLBaseName}.key 4094
+
+openssl req -sha512 -new -x509 -days 3650 -key ${dirname}/${SSLBaseName}.key -out ${dirname}/${SSLBaseName}.crt -subj "${CASubject}"
+
+
+
+tmsh list sys crypto key
+
+tmsh install sys crypto key ${SSLBaseName}.key from-local-file ${dirname}/${SSLBaseName}.key
+
+tmsh list sys crypto key
+
+
+
+tmsh list sys crypto cert
+
+tmsh install sys crypto cert ${SSLBaseName}.crt from-local-file ${dirname}/${SSLBaseName}.crt
+
+tmsh list sys crypto cert
+
+
+
+tmsh list ltm profile client-ssl
+
+tmsh create ltm profile client-ssl clientssl_${SSLBaseName} { cert-lookup-by-ipaddr-port disabled defaults-from clientssl mode enabled cert-key-chain add { ${SSLBaseName} { cert ${SSLBaseName}.crt key ${SSLBaseName}.key usage CA } } ssl-forward-proxy enabled }
+
+tmsh list ltm profile client-ssl
+
+
+
+tmsh list ltm profile server-ssl
+
+tmsh create ltm profile server-ssl serverssl_${SSLBaseName} { defaults-from serverssl ssl-forward-proxy enabled }
+
+tmsh list ltm profile server-ssl
+
+
+
+tmsh list ltm virtual
+
+tmsh create ltm virtual VS_${SSLBaseName} { destination 0.0.0.0:https ip-protocol tcp profiles replace-all-with { clientssl_${SSLBaseName} { context clientside } serverssl_${SSLBaseName} { context serverside } http { } tcp { } } source 0.0.0.0/0 translate-address disabled translate-port disabled vlans replace-all-with  { http-tunnel_${HTTPBaseName} } vlans-enabled }
+
+tmsh list ltm virtual
+
+
+
+tmsh list ltm profile http 
+
+tmsh modify ltm profile http http_${HTTPBaseName} explicit-proxy { default-connect-handling deny }
+
+tmsh list ltm profile http 
+
+
+
+tmsh save sys config partitions all
